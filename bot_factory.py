@@ -1,3 +1,22 @@
+import os
+from dotenv import load_dotenv
+
+# 1. Carica il .env automaticamente (per BotHosting/Fizzalo)
+load_dotenv()
+
+# 2. Supporta tutti i nomi comuni di token che usano gli hosting
+TOKEN = (
+    os.getenv("DISCORD_TOKEN") or
+    os.getenv("BOT_TOKEN") or
+    os.getenv("DISCORD_BOT_TOKEN") or
+    os.getenv("TOKEN") or
+    os.getenv("FACTORY_TOKEN")
+)
+
+if not TOKEN:
+    print("ERRORE: Nessun token trovato! Controlla le Variabili d'Ambiente nel pannello.")
+else:
+    print("Token trovato, avvio...")
 import json
 import os
 import re
@@ -258,3 +277,4 @@ def start_generated_bots() -> list[subprocess.Popen[str]]:
 if __name__ == "__main__":
     print("Factory bot utilities loaded.")
     print("Available categories:", CATEGORY_CHOICES)
+bot.run(TOKEN)
