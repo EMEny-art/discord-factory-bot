@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import discord
+from discord import app_commands
+from discord.ext import commands
+
+from bot_factory import CATEGORY_CHOICES, compute_total_commands, normalize_categories, register_bot
+
+
+class MasterFactory(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @app_commands.command(name="crea-bot", description="Crea un bot Discord con categorie personalizzate.")
+    @app_commands.describe(
+        token_bot="Token del bot Discord",
+        categoria_1="Categoria 1 (opzionale)",
+        categoria_2="Categoria 2 (opzionale)",
+        categoria_3="Categoria 3 (opzionale)",
+    )
+    async def crea_bot(
+        self,
+        interaction: discord.Interaction,
+        token_bot: str,
+        categoria_1: str = "",
+        categoria_2: str = "",
+        categoria_3: str = "",
+    ) -> None:
+        categories = normalize_categories(categoria_1, categoria_2, categoria_3)
+
+        if not categories:
+            await interaction.response.send_message(
+                "❌ Nessuna categoria valida selezionata. Scegli tra: " + ", ".join(CATEGORY_CHOICES),
+                ephemeral=True,
+            )
+            return
+
+        total = compute_total_commands(categories)
+        register_bot(token_bot, categories)
+
+        await interaction.response.send_message(
+            f"✅ Bot registrato correttamente.\n"
+            f"Token: `{token_bot[:10]}...`\n"
+            f"Categorie: {', '.join(categories)}\n"
+            f"Totale comandi: {total}\n"
+            f"File salvato: `bots.json`"
+        )
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(MasterFactory(bot))

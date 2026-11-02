@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+REGISTRY_FILE = Path(__file__).resolve().parent / "bots.json"
+
+CATEGORY_CONFIG = {
+    "TICKET AVANZATI": {"id": "ticket", "count": 200},
+    "MODERAZIONE AVANZATA": {"id": "moderation", "count": 200},
+    "CONFIGURAZIONE AVANZATA": {"id": "configuration", "count": 150},
+    "GIVEAWAY ED ECONOMIA": {"id": "giveaway", "count": 150},
+    "MUSICA E FUN": {"id": "music", "count": 200},
+    "TUTTO": {"id": "all", "count": 900},
+}
+
+CATEGORY_CHOICES = [
+    "TICKET AVANZATI",
+    "MODERAZIONE AVANZATA",
+    "CONFIGURAZIONE AVANZATA",
+    "GIVEAWAY ED ECONOMIA",
+    "MUSICA E FUN",
+    "TUTTO",
+]
+
+ALIASES = {
+    "TICKET": "TICKET AVANZATI",
+    "MODERAZIONE": "MODERAZIONE AVANZATA",
+    "CONFIG": "CONFIGURAZIONE AVANZATA",
+    "CONFIGURAZIONE": "CONFIGURAZIONE AVANZATA",
+    "GIVEAWAY": "GIVEAWAY ED ECONOMIA",
+    "ECONOMIA": "GIVEAWAY ED ECONOMIA",
+    "MUSICA": "MUSICA E FUN",
+    "FUN": "MUSICA E FUN",
+    "ALL": "TUTTO",
+    "TUTTI": "TUTTO",
+}
+
+
+def normalize_category(value: str | None) -> str:
+    if value is None:
+        return ""
+    cleaned = value.strip()
+    normalized = " ".join(cleaned.split()).upper()
+    return ALIASES.get(normalized, normalized)
+
+
+def normalize_categories(*values: str | None) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        cat = normalize_category(value)
+        if not cat:
+            continue
+
+        if cat == "TUTTO":
+            all_cats = [
+                "TICKET AVANZATI",
+                "MODERAZIONE AVANZATA",
+                "CONFIGURAZIONE AVANZATA",
+                "GIVEAWAY ED ECONOMIA",
+                "MUSICA E FUN",
+            ]
+            for item in all_cats:
+                if item not in seen:
+                    selected.append(item)
+                    seen.add(item)
+            continue
+
+        if cat in CATEGORY_CONFIG and cat not in seen:
+            selected.append(cat)
+            seen.add(cat)
+
+    return selected
+
+
+def compute_total_commands(categories: list[str]) -> int:
+    total = 0
+    for category in categories:
+        total += CATEGORY_CONFIG.get(category, {}).get("count", 0)
+    return total
+
+
+def ensure_registry_exists() -> None:
+    if not REGISTRY_FILE.exists():
+        REGISTRY_FILE.write_text("[]\n", encoding="utf-8")
+
+
+def load_registered_bots() -> list[dict[str, Any]]:
+    ensure_registry_exists()
+    try:
+        with REGISTRY_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
+def register_bot(token: str, categories: list[str]) -> dict[str, Any]:
+    ensure_registry_exists()
+    registry = load_registered_bots()
+
+    normalized = normalize_categories(*categories)
+    bot_data = {
+        "token": token,
+        "categories": normalized,
+        "total_commands": compute_total_commands(normalized),
+    }
+
+    existing = next((item for item in registry if item.get("token") == token), None)
+    if existing is not None:
+        existing.update(bot_data)
+    else:
+        registry.append(bot_data)
+
+    with REGISTRY_FILE.open("w", encoding="utf-8") as f:
+        json.dump(registry, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    return bot_data
+
+
+def get_category_summary() -> str:
+    return " | ".join(f"{name}: {info['count']}" for name, info in CATEGORY_CONFIG.items() if name != "TUTTO")
+
+
+if __name__ == "__main__":
+    print(get_category_summary())
+    print("Total commands expected:", CATEGORY_CONFIG["TUTTO"]["count"])
