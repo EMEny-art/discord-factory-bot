@@ -1,22 +1,29 @@
-from __future__ import annotations
-
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_factory import CATEGORY_CHOICES, compute_total_commands, normalize_categories, register_bot
+from bot_factory import (
+    CATEGORY_CHOICES,
+    CATEGORY_CONFIG,
+    build_invite_url,
+    compute_total_commands,
+    create_generated_bot,
+    normalize_categories,
+)
 
 
 class MasterFactory(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="crea-bot", description="Crea un bot Discord con categorie personalizzate.")
+    @app_commands.command(name="crea-bot", description="Crea un bot Discord reale con comandi generati per categoria.")
     @app_commands.describe(
-        token_bot="Token del bot Discord",
+        token_bot="Token del bot Discord.",
         categoria_1="Categoria 1 (opzionale)",
         categoria_2="Categoria 2 (opzionale)",
         categoria_3="Categoria 3 (opzionale)",
+        bot_name="Nome del bot generato (opzionale)",
+        client_id="Client ID di Discord (opzionale, usa questo per creare l'invito)",
     )
     async def crea_bot(
         self,
@@ -25,26 +32,39 @@ class MasterFactory(commands.Cog):
         categoria_1: str = "",
         categoria_2: str = "",
         categoria_3: str = "",
+        bot_name: str = "",
+        client_id: str = "",
     ) -> None:
-        categories = normalize_categories(categoria_1, categoria_2, categoria_3)
-
-        if not categories:
+        selected = normalize_categories(categoria_1, categoria_2, categoria_3)
+        if not selected:
             await interaction.response.send_message(
-                "❌ Nessuna categoria valida selezionata. Scegli tra: " + ", ".join(CATEGORY_CHOICES),
+                "❌ Nessuna categoria valida. Scegli tra: " + ", ".join(CATEGORY_CHOICES),
                 ephemeral=True,
             )
             return
 
-        total = compute_total_commands(categories)
-        register_bot(token_bot, categories)
+        total = compute_total_commands(selected)
+        created = create_generated_bot(selected, token_bot, bot_name or "factory-bot", client_id)
 
-        await interaction.response.send_message(
-            f"✅ Bot registrato correttamente.\n"
-            f"Token: `{token_bot[:10]}...`\n"
-            f"Categorie: {', '.join(categories)}\n"
-            f"Totale comandi: {total}\n"
-            f"File salvato: `bots.json`"
-        )
+        reply = [
+            "✅ Bot reale creato con successo.",
+            f"Categorie: {', '.join(selected)}",
+            f"Totale comandi: {total}",
+            f"Token salvato in `bots.json` (non condividere): `{token_bot[:8]}...`",
+        ]
+
+        if client_id:
+            reply.append(f"Invito: {created['invite_url'] or build_invite_url(client_id)}")
+        else:
+            reply.append("⚠️ Nessun Client ID inserito: non ho potuto creare l'URL di invito. Inserisci `client_id` per generare subito l'invito Discord.")
+
+        await interaction.response.send_message("\n".join(reply), ephemeral=False)
+
+    @app_commands.command(name="categorie", description="Mostra tutte le categorie disponibili e i relativi conteggi.")
+    async def categorie(self, interaction: discord.Interaction) -> None:
+        lines = [f"{name}: {info['count']} comandi" for name, info in CATEGORY_CONFIG.items() if name != "TUTTO"]
+        lines.append(f"TUTTO: {CATEGORY_CONFIG['TUTTO']['count']} comandi")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

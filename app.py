@@ -1,60 +1,257 @@
-from __future__ import annotations
-
+import asyncio
+import json
 import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import discord
 from discord.ext import commands
 
-from bot_factory import load_registered_bots
+BASE_DIR = Path(__file__).resolve().parent
+REGISTRY_FILE = BASE_DIR / "bots.json"
+GENERATED_DIR = BASE_DIR / "generated_bots"
+
+CATEGORY_CONFIG = {
+    "TICKET AVANZATI": {"slug": "ticket", "count": 200},
+    "MODERAZIONE AVANZATA": {"slug": "moderation", "count": 200},
+    "CONFIGURAZIONE AVANZATA": {"slug": "configuration", "count": 150},
+    "GIVEAWAY ED ECONOMIA": {"slug": "giveaway", "count": 150},
+    "MUSICA E FUN": {"slug": "music", "count": 200},
+    "TUTTO": {"slug": "all", "count": 900},
+}
+
+CATEGORY_CHOICES = [
+    "TICKET AVANZATI",
+    "MODERAZIONE AVANZATA",
+    "CONFIGURAZIONE AVANZATA",
+    "GIVEAWAY ED ECONOMIA",
+    "MUSICA E FUN",
+    "TUTTO",
+]
+
+CATEGORY_ALIASES = {
+    "TICKET": "TICKET AVANZATI",
+    "MODERAZIONE": "MODERAZIONE AVANZATA",
+    "CONFIG": "CONFIGURAZIONE AVANZATA",
+    "CONFIGURAZIONE": "CONFIGURAZIONE AVANZATA",
+    "GIVEAWAY": "GIVEAWAY ED ECONOMIA",
+    "ECONOMIA": "GIVEAWAY ED ECONOMIA",
+    "MUSICA": "MUSICA E FUN",
+    "FUN": "MUSICA E FUN",
+    "ALL": "TUTTO",
+    "TUTTI": "TUTTO",
+}
 
 
-class FactoryBot(commands.Bot):
+class FactoryMasterBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guilds = True
         intents.members = True
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            help_command=None,
-        )
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
 
     async def setup_hook(self) -> None:
-        for cog_name in [
-            "master_factory",
-            "ticket_advanced",
-            "moderation_advanced",
-            "configuration_advanced",
-            "giveaway_economia",
-            "music_fun",
-        ]:
-            try:
-                await self.load_extension(f"cogs.{cog_name}")
-            except Exception as exc:  # pragma: no cover
-                print(f"Errore durante il caricamento di {cog_name}: {exc}")
-
+        await self.load_extension("cogs.master_factory")
         try:
             await self.tree.sync()
-        except Exception:  # pragma: no cover
+        except Exception:
             pass
 
-        registry = load_registered_bots()
-        for bot_info in registry:
-            print(f"Bot registrato: {bot_info['token'][:8]}... | categorie={bot_info['categories']}")
+    async def on_ready(self):
+        print(f"Master bot online: {self.user} ({self.user.id})")
+        start_generated_bots()
 
 
-async def main() -> None:
-    token = os.getenv("DISCORD_TOKEN")
-    if not token:
-        raise RuntimeError("DISCORD_TOKEN non impostato. Usa .env o le variabili d'ambiente di Render.")
+def normalize_category(value: str | None) -> str:
+    if value is None:
+        return ""
+    cleaned = " ".join(value.strip().split()).upper()
+    if not cleaned:
+        return ""
+    return CATEGORY_ALIASES.get(cleaned, cleaned)
 
-    bot = FactoryBot()
+
+def normalize_categories(*values: str | None) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    for value in values:
+        category = normalize_category(value)
+        if not category:
+            continue
+        if category == "TUTTO":
+            for item in [
+                "TICKET AVANZATI",
+                "MODERAZIONE AVANZATA",
+                "CONFIGURAZIONE AVANZATA",
+                "GIVEAWAY ED ECONOMIA",
+                "MUSICA E FUN",
+            ]:
+                if item not in seen:
+                    selected.append(item)
+                    seen.add(item)
+            continue
+        if category in CATEGORY_CONFIG and category not in seen:
+            selected.append(category)
+            seen.add(category)
+
+    return selected
+
+
+def compute_total_commands(categories: list[str]) -> int:
+    total = 0
+    for cat in categories:
+        total += CATEGORY_CONFIG.get(cat, {}).get("count", 0)
+    return total
+
+
+def ensure_registry_exists() -> None:
+    REGISTRY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if not REGISTRY_FILE.exists():
+        REGISTRY_FILE.write_text("[]\n", encoding="utf-8")
+
+
+def load_registered_bots() -> list[dict[str, Any]]:
+    ensure_registry_exists()
+    try:
+        with REGISTRY_FILE.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def write_registry(data: list[dict[str, Any]]) -> None:
+    with REGISTRY_FILE.open("w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+
+def build_invite_url(client_id: str, permissions: int = 8) -> str:
+    if not client_id:
+        return ""
+    return (
+        "https://discord.com/api/oauth2/authorize"
+        f"?client_id={client_id}&permissions={permissions}&scope=bot%20applications.commands"
+    )
+
+
+def bot_name_slug(value: str) -> str:
+    safe = "".join(ch.lower() if ch.isalnum() else "_" for ch in value.strip()).strip("_")
+    return safe or "factory_bot"
+
+
+def render_generated_bot_source(categories: list[str], bot_name: str, token: str, client_id: str) -> str:
+    command_blocks: list[str] = []
+    for category in categories:
+        info = CATEGORY_CONFIG.get(category)
+        if not info:
+            continue
+        slug = info["slug"]
+        count = info["count"]
+        for index in range(1, count + 1):
+            command_name = f"{slug}_{index:03d}"
+            description = f"{category} command #{index}"
+            command_blocks.append(
+                f'''
+@bot.tree.command(name="{command_name}", description="{description}")
+async def {command_name}(interaction: discord.Interaction):
+    await interaction.response.send_message(f"✅ {description} | bot: {{bot_name}}")
+'''
+            )
+
+    commands_block = "\n".join(command_blocks)
+    invite_url = build_invite_url(client_id)
+    return f'''import os
+import discord
+from discord.ext import commands
+
+BOT_NAME = {bot_name!r}
+BOT_TOKEN = {token!r}
+CLIENT_ID = {client_id!r}
+INVITE_URL = {invite_url!r}
+
+intents = discord.Intents.default()
+intents.guilds = True
+intents.members = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+@bot.event
+async def on_ready():
+    print(f"Generated bot online: {{bot.user}} | id={{bot.user.id}}")
+    if INVITE_URL:
+        print(f"Invito: {{INVITE_URL}}")
+
+{commands_block}
+
+async def main():
+    token = os.getenv("DISCORD_TOKEN") or BOT_TOKEN
     await bot.start(token)
-
 
 if __name__ == "__main__":
     import asyncio
-
     asyncio.run(main())
+'''
+
+
+def create_generated_bot(categories: list[str], token: str, bot_name: str, client_id: str = "") -> dict[str, Any]:
+    safe_name = bot_name_slug(bot_name or f"bot_{len(load_registered_bots()) + 1}")
+    bot_dir = GENERATED_DIR / safe_name
+    bot_dir.mkdir(parents=True, exist_ok=True)
+    script_path = bot_dir / "bot.py"
+    script_path.write_text(render_generated_bot_source(categories, bot_name or safe_name, token, client_id), encoding="utf-8")
+
+    result = {
+        "name": bot_name or safe_name,
+        "token": token,
+        "categories": categories,
+        "total_commands": compute_total_commands(categories),
+        "client_id": client_id,
+        "invite_url": build_invite_url(client_id),
+        "script_path": str(script_path),
+        "created": True,
+    }
+    registry = load_registered_bots()
+    existing_index = next((index for index, item in enumerate(registry) if item.get("token") == token), None)
+    if existing_index is not None:
+        registry[existing_index] = result
+    else:
+        registry.append(result)
+    write_registry(registry)
+    return result
+
+
+def start_generated_bots() -> list[subprocess.Popen[str]]:
+    processes: list[subprocess.Popen[str]] = []
+    for entry in load_registered_bots():
+        script_path = entry.get("script_path")
+        if not script_path or not Path(script_path).exists():
+            continue
+        env = os.environ.copy()
+        env["DISCORD_TOKEN"] = str(entry.get("token", ""))
+        proc = subprocess.Popen(
+            [sys.executable, script_path],
+            cwd=str(BASE_DIR),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        processes.append(proc)
+    return processes
+
+
+def build_master_bot() -> FactoryMasterBot:
+    return FactoryMasterBot()
+
+
+if __name__ == "__main__":
+    print("Factory bot utilities loaded.")
+    print("Categories:", CATEGORY_CHOICES)
