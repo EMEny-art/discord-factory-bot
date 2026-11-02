@@ -1,17 +1,17 @@
 import asyncio
 import os
 
-from bot_factory import build_master_bot
+from bot_factory import FactoryMasterBot
 
 
 async def main() -> None:
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise RuntimeError(
-            "DISCORD_TOKEN non impostato. Impostalo nel tuo host (Bothosting, VPS, Render, ecc.)"
+            "DISCORD_TOKEN non impostato. Impostalo nel tuo host (Bothosting, VPS, Render, Railway, ecc.)"
         )
 
-    bot = build_master_bot()
+    bot = FactoryMasterBot()
     await bot.start(token)
 
 
